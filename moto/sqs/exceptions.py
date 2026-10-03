@@ -43,10 +43,11 @@ class PurgeQueueInProgress(SQSException):
 
 
 class EmptyBatchRequest(SQSException):
-    def __init__(self, action: str = "Send") -> None:
+    def __init__(self, action: str = "Send", entry_type: str | None = None) -> None:
+        entry_type = entry_type or f"{action}MessageBatchRequestEntry"
         super().__init__(
             "AWS.SimpleQueueService.EmptyBatchRequest",
-            f"There should be at least one {action}MessageBatchRequestEntry in the request.",
+            f"There should be at least one {entry_type} in the request.",
         )
 
 

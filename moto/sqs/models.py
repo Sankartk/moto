@@ -966,6 +966,16 @@ class SQSBackend(BaseBackend, TaggableResourcesMixin):
             unique_ids.add(_id)
         return None
 
+    def _validate_batch_entry_ids(self, entries: list[dict[str, Any]]) -> None:
+        ids = [entry["Id"] for entry in entries]
+        if any(not re.match(r"^[\w-]{1,80}$", _id) for _id in ids):
+            raise InvalidBatchEntryId()
+        duplicate_id = self._get_first_duplicate_id(ids)
+        if duplicate_id:
+            raise BatchEntryIdsNotDistinct(duplicate_id)
+        if len(entries) > 10:
+            raise TooManyEntriesInBatchRequest(len(entries))
+
     def receive_message(
         self,
         queue_name: str,
@@ -1059,6 +1069,7 @@ class SQSBackend(BaseBackend, TaggableResourcesMixin):
     def delete_message_batch(
         self, queue_name: str, receipts: list[dict[str, Any]]
     ) -> tuple[list[str], list[dict[str, str]]]:
+        self._validate_batch_entry_ids(receipts)
         success = []
         errors = []
         for receipt_and_id in receipts:
@@ -1101,6 +1112,7 @@ class SQSBackend(BaseBackend, TaggableResourcesMixin):
     def change_message_visibility_batch(
         self, queue_name: str, entries: list[dict[str, Any]]
     ) -> tuple[list[str], list[dict[str, str]]]:
+        self._validate_batch_entry_ids(entries)
         success = []
         error = []
         for entry in entries:

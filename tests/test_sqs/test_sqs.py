@@ -2053,6 +2053,110 @@ def test_delete_message_batch_with_zero_entries(queue_name=None, queue_url=None)
 
 
 @mock_aws
+def test_delete_message_batch_validates_entries():
+    client = boto3.client("sqs", region_name=REGION)
+    queue_url = client.create_queue(QueueName=str(uuid4())[0:6])["QueueUrl"]
+    for idx in range(2):
+        client.send_message(QueueUrl=queue_url, MessageBody=f"msg{idx}")
+    handles = [
+        msg["ReceiptHandle"]
+        for msg in client.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=2)[
+            "Messages"
+        ]
+    ]
+    assert len(handles) == 2
+
+    def delete(entries):
+        with pytest.raises(ClientError) as exc:
+            client.delete_message_batch(QueueUrl=queue_url, Entries=entries)
+        return exc.value.response["Error"]["Code"]
+
+    # More than 10 entries
+    entries = [{"Id": f"id{i}", "ReceiptHandle": f"handle{i}"} for i in range(11)]
+    assert delete(entries) == "AWS.SimpleQueueService.TooManyEntriesInBatchRequest"
+
+    # Same Id on entries that have different receipt handles
+    entries = [
+        {"Id": "same", "ReceiptHandle": handles[0]},
+        {"Id": "same", "ReceiptHandle": handles[1]},
+    ]
+    assert delete(entries) == "AWS.SimpleQueueService.BatchEntryIdsNotDistinct"
+
+    # Id with characters that are not allowed
+    for invalid_id in ["has space", "has.dot", "a" * 81]:
+        entries = [{"Id": invalid_id, "ReceiptHandle": handles[0]}]
+        assert delete(entries) == "AWS.SimpleQueueService.InvalidBatchEntryId"
+
+    # None of the rejected requests deleted anything
+    for handle in handles:
+        client.change_message_visibility(
+            QueueUrl=queue_url, ReceiptHandle=handle, VisibilityTimeout=0
+        )
+    messages = client.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10)
+    assert len(messages["Messages"]) == 2
+
+
+@mock_aws
+def test_change_message_visibility_batch_validates_entries():
+    client = boto3.client("sqs", region_name=REGION)
+    queue_url = client.create_queue(QueueName=str(uuid4())[0:6])["QueueUrl"]
+    for idx in range(2):
+        client.send_message(QueueUrl=queue_url, MessageBody=f"msg{idx}")
+    handles = [
+        msg["ReceiptHandle"]
+        for msg in client.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=2)[
+            "Messages"
+        ]
+    ]
+    assert len(handles) == 2
+
+    def change(entries):
+        with pytest.raises(ClientError) as exc:
+            client.change_message_visibility_batch(QueueUrl=queue_url, Entries=entries)
+        return exc.value.response["Error"]
+
+    def entry(entry_id, handle):
+        return {"Id": entry_id, "ReceiptHandle": handle, "VisibilityTimeout": 60}
+
+    # No entries
+    err = change([])
+    assert err["Code"] == "AWS.SimpleQueueService.EmptyBatchRequest"
+    assert err["Message"] == (
+        "There should be at least one ChangeMessageVisibilityBatchRequestEntry "
+        "in the request."
+    )
+
+    # More than 10 entries
+    entries = [entry(f"id{i}", handles[0]) for i in range(11)]
+    assert (
+        change(entries)["Code"] == "AWS.SimpleQueueService.TooManyEntriesInBatchRequest"
+    )
+
+    # Same Id on entries that have different receipt handles
+    entries = [entry("same", handles[0]), entry("same", handles[1])]
+    assert change(entries)["Code"] == "AWS.SimpleQueueService.BatchEntryIdsNotDistinct"
+
+    # Id with characters that are not allowed
+    for invalid_id in ["has space", "has.dot", "a" * 81]:
+        assert (
+            change([entry(invalid_id, handles[0])])["Code"]
+            == "AWS.SimpleQueueService.InvalidBatchEntryId"
+        )
+
+    # A valid batch is still accepted
+    resp = client.change_message_visibility_batch(
+        QueueUrl=queue_url, Entries=[entry("a", handles[0]), entry("b", handles[1])]
+    )
+    assert [e["Id"] for e in resp["Successful"]] == ["a", "b"]
+    assert resp["Failed"] == []
+
+    # Exactly 10 entries is the upper limit that is accepted
+    entries = [entry(f"id{i}", handles[0]) for i in range(10)]
+    resp = client.change_message_visibility_batch(QueueUrl=queue_url, Entries=entries)
+    assert len(resp["Successful"]) == 10
+
+
+@mock_aws
 def test_message_attributes_in_receive_message():
     sqs = boto3.resource("sqs", region_name=REGION)
     conn = boto3.client("sqs", region_name=REGION)

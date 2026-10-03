@@ -106,6 +106,10 @@ class SQSResponse(BaseResponse):
     def change_message_visibility_batch(self) -> ActionResult:
         queue_name = self._get_queue_name()
         entries = self._get_param("Entries", [])
+        if not entries:
+            raise EmptyBatchRequest(
+                entry_type="ChangeMessageVisibilityBatchRequestEntry"
+            )
         success, failed = self.sqs_backend.change_message_visibility_batch(
             queue_name, entries
         )
